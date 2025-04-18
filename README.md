@@ -5,12 +5,15 @@
 from auto5hmcML.models import trainmodels
 from auto5hmcML.visuals import Visualization
 from auto5hmcML.models import RetrieveFeatures
+from auto5hmcML.models import plot_feature_global_logloss_importance,plot_compare_roc
+from auto5hmcML.visuals import plot_best_roc_curves, plot_roc_curves_all
 import os
 import pandas as pd
 import numpy as np
 import joblib
 
 os.chdir("/home/username/path_to_your_workdir")
+dir_path="/home/username/path_to_your_workdir"
 trainset = pd.read_csv("trainset.csv")
 testset = pd.read_csv("testset.csv")
 trainset=pd.read_csv("trainset.csv")
