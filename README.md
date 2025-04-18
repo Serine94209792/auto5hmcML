@@ -1,4 +1,5 @@
 # example of auto5hmcML
+![image](image/auto5hmcML.png)
 
 ```
 from auto5hmcML.models import trainmodels
@@ -12,6 +13,11 @@ import joblib
 os.chdir("/home/username/path_to_your_workdir")
 trainset = pd.read_csv("trainset.csv")
 testset = pd.read_csv("testset.csv")
+trainset=pd.read_csv("trainset.csv")
+testset=pd.read_csv("testset.csv")
+trainlabel = trainset[target_label]
+testlabel = testset[target_label]
+label = pd.concat([trainlabel, testlabel], axis=0)
 
 trainmodels(trainset=trainset,
             testset=testset,
@@ -34,7 +40,11 @@ trainmodels(trainset=trainset,
 
 modelpath = "best_moral_type/0_best_model.pkl"
 pipeline = joblib.load(modelpath)
-RetrieveFeatures(pipeline, trainset)
+    RetrieveFeatures(pipeline,
+                     trainset=trainset,
+                     testset=testset,
+                     y=target_label,
+                     )
 feature_df = pd.read_csv("second_filter_features.csv")
 feature_sel=feature_df["feature_name"].to_numpy().flatten()
 Visualization(pipeline,
@@ -45,4 +55,28 @@ Visualization(pipeline,
               )
 ```
 
-Now the workflow has done!!! you can get the trained models with best hyperparameters, the selected features, and the evaluation plots of the best model.
+Now the workflow has done!!! you can get the trained models with best hyperparameters, the selected features, and the evaluation plots of the best model. At the same time, the shap_explaination class has been stored in the workdir. We can use it for next model explainaion.
+
+```
+shap_values_pca=joblib.load("shap_values_pca.pkl")
+plot_compare_roc(shap_values_pca,
+                feature='PC4',
+                y_true=label)
+
+plot_feature_global_logloss_importance(shap_values_pca, label)
+
+plot_roc_curves_all(model_path=dir_path,
+                X=testset,
+                label="LM",
+                drop_y=training_label,
+                fpr_grid_points=100
+)
+
+plot_best_roc_curves(model_path=dir_path,
+        X=testset,
+        label="LM",
+        drop_y=training_label,
+        fpr_grid_points=100
+)
+```
+
