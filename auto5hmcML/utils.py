@@ -125,3 +125,4 @@ def optimize_and_build_pipeline(
     df.loc["mean"]=mean_row
     df.to_csv("metrics.csv")
     return df
+
