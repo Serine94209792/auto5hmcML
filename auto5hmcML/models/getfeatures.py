@@ -1,7 +1,6 @@
 """
 目前该函数在shap时存在问题：
 pca后的shap值无法转回pca前，pca固有的损失
-不依赖模型的explainer结果不太对
 """
 
 from typing import List,Optional
@@ -9,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import shap
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from ..classes import Imbalencer,FirstFilter,SecondFilter,Learner,CustomUnivariateSelect
 from sklearn.feature_selection import GenericUnivariateSelect
 from sklearn.decomposition import PCA
@@ -120,25 +119,32 @@ def RetrieveFeatures(
     dataset.reset_index(drop=True, inplace=True)
     label.reset_index(drop=True, inplace=True)
 
-    if has_learner and pipeline.named_steps["learner"].model_type=="pca":
-        pca=pipeline.named_steps["learner"]
-        pre_pca=Pipeline(steps[:-2])
+    if has_learner:
+        pre_decompose=Pipeline(steps[:-1])
         model = pipeline.steps[-1][-1]
-        datasel=pre_pca.transform(dataset)
-        datapca=pca.transform(datasel)
-        explainer=shap.Explainer(model.predict_proba,datapca)   ##默认连接函数为概率，可以选择logit
-        shap_values=explainer(datapca) #[n_samples, n_features, n_classes]
+        data_reduce=pre_decompose.transform(dataset)
+        explainer=shap.Explainer(model.predict_proba,data_reduce,link=shap.links.identity)   ##默认连接函数为概率，可以选择logit
+        shap_values=explainer(data_reduce) #[n_samples, n_features, n_classes]
         shap_values = shap_values[:, :, 1]  ###取正类shap
         ####这里返回一个explainer类，里面有shap值矩阵，base_value向量，输入矩阵三个属性
 
-        pca_feature_names = [f"PC{i + 1}" for i in range(datapca.shape[1])]
+        if pipeline.named_steps["learner"].model_type in ["kpca","pca"]:
+            feature_names = [f"PC{i + 1}" for i in range(data_reduce.shape[1])]
+        else:
+            feature_names = [f"Dimension{i + 1}" for i in range(data_reduce.shape[1])]
+
         shap_values_pca = shap.Explanation(
             values=shap_values.values,
             base_values=shap_values.base_values,
             data=shap_values.data,
-            feature_names=pca_feature_names
+            feature_names=feature_names
         )
-        joblib.dump(shap_values_pca, "shap_values_pca.pkl")
+        joblib.dump(shap_values_pca, "shap_values.pkl")
+
+        plot_feature_global_logloss_importance(
+            shap_expl=shap_values_pca,
+            y_true=label,
+        )
 
         shap_mat = shap_values_pca.values
         feature_names = shap_values_pca.feature_names
@@ -150,6 +156,12 @@ def RetrieveFeatures(
 
         importance_df = importance_df.sort_values('mean_abs_shap', ascending=True)
         feature_order = importance_df.index
+
+        plot_compare_roc(
+            shap_expl=shap_values_pca,
+            y_true=label,
+            feature=importance_df["feature"].iloc[-1],
+        )
 
         shap.plots.beeswarm(shap_values_pca,
                             max_display=max_display)
@@ -163,14 +175,14 @@ def RetrieveFeatures(
         plt.savefig("global_feature_importance.png")
         plt.close()
 
-        select = np.random.choice(datasel.shape[0], size=30, replace=False)
+        select = np.random.choice(data_reduce.shape[0], size=30, replace=False)
         expected_value = np.unique(shap_values_pca.base_values)
         y_pred = (shap_values_pca.values.sum(1) + expected_value) > 0.5
         ##pca后的值是概率p，因为没填连接函数link
         misclassified = y_pred[select] != label[select]
         shap.decision_plot(base_value=expected_value,
                            shap_values=shap_values_pca[select].values,
-                           feature_names=pca_feature_names,
+                           feature_names=feature_names,
                            feature_order=feature_order.tolist(),
                            feature_display_range=slice(None, None, -1),
                            # link="logit",
@@ -193,15 +205,14 @@ def RetrieveFeatures(
         plt.savefig("heatmap.png")
         plt.close()
 
-    elif has_learner and pipeline.named_steps["learner"].model_type!="pca":
-        pre_decompose=Pipeline(steps[:-2])
-        model = Pipeline(steps[-2:])
-        datasel = pre_decompose.transform(dataset)
-        f = lambda X: model.predict_proba(X)[:, 1]
-        background = shap.kmeans(datasel, 100)
-        explainer = shap.KernelExplainer(f,background)
-        shap_values = explainer(datasel)
-        shap_values = shap_values[:, :, 1]
+    else:
+        pre_process = Pipeline(steps[:-1])
+        model = pipeline.steps[-1][-1]
+        datasel = pre_process.transform(dataset)
+        explainer=shap.Explainer(model.predict_proba,datasel,link=shap.links.identity)
+        ###没填link默认输出概率
+        shap_values=explainer(datasel) #[n_samples, n_features, n_classes]
+        shap_values = shap_values[:, :, 1]  ###取正类shap
 
         shap_values = shap.Explanation(
             values=shap_values.values,
@@ -209,8 +220,12 @@ def RetrieveFeatures(
             data=shap_values.data,
             feature_names=origin_colnums
         )
-
         joblib.dump(shap_values, "shap_values.pkl")
+
+        plot_feature_global_logloss_importance(
+            shap_expl=shap_values,
+            y_true=label,
+        )
 
         shap_mat = shap_values.values
         feature_names = shap_values.feature_names
@@ -222,78 +237,11 @@ def RetrieveFeatures(
         importance_df = importance_df.sort_values('mean_abs_shap', ascending=True)
         feature_order = importance_df.index
 
-        shap.summary_plot(shap_values,
-                          plot_type="bar",
-                          max_display=20,
-                          )
-        plt.tight_layout()
-        plt.savefig("bar.png")
-        plt.close()
-
-        shap.plots.beeswarm(shap_values,
-                            max_display=20,
-                            group_remaining_features=False, )
-        plt.tight_layout()
-        plt.savefig("beeswarm.png")
-        plt.close()
-
-        select = np.random.choice(datasel.shape[0], size=30, replace=False)
-        expected_value = np.unique(shap_values.base_values)
-        y_pred = (shap_values.values.sum(1) + expected_value) > 0.5
-        misclassified = y_pred[select] != label[select]
-        shap.decision_plot(base_value=expected_value,
-                           shap_values=shap_values[select].values,
-                           feature_names=origin_colnums,
-                           feature_order=feature_order.tolist(),
-                           # link="logit",
-                           highlight=misclassified,
-                           # new_base_value=np.log(0.5/0.5),
-                           # feature_order="hclust",
-                           )
-        plt.tight_layout()
-        plt.savefig("decision_plot.png")
-        plt.close()
-
-        shap.decision_plot(base_value=expected_value,
-                           shap_values=shap_values[select].values,
-                           feature_names=origin_colnums,
-                           feature_order=feature_order.tolist(),
-                           feature_display_range=slice(None, None, -1),
-                           # link="logit",
-                           highlight=misclassified,
-                           # new_base_value=np.log(0.5/0.5),
-                           # feature_order="hclust",
-                           )
-        plt.tight_layout()
-        plt.savefig("decision_plot_all.png")
-        plt.close()
-
-        inds = shap.utils.potential_interactions(shap_values[:, shap_values.abs.mean(0).argsort[-1]], shap_values)
-        for i in range(3):
-            shap.plots.scatter(shap_values[:, shap_values.abs.mean(0).argsort[-1]], color=shap_values[:, inds[i]])
-            plt.tight_layout()
-            plt.savefig(f"scatter_{i}.png")
-            plt.close()
-
-    else:
-        pre_process = Pipeline(steps[:-1])
-        model = pipeline.steps[-1][-1]
-        datasel = pre_process.transform(dataset)
-        explainer=shap.Explainer(model.predict_proba,datasel)
-        ###没填link默认输出概率
-        shap_values=explainer(datasel) #[n_samples, n_features, n_classes]
-        shap_values = shap_values[:, :, 1]  ###取正类shap
-        joblib.dump(shap_values, "shap_values.pkl")
-
-        shap_mat = shap_values.values
-        feature_names = shap_values.feature_names
-        mean_abs_shap = np.abs(shap_mat).mean(axis=0)
-        importance_df = pd.DataFrame({
-            'feature': feature_names,
-            'mean_abs_shap': mean_abs_shap
-        })
-        importance_df = importance_df.sort_values('mean_abs_shap', ascending=True)
-        feature_order = importance_df.index
+        plot_compare_roc(
+            shap_expl=shap_values,
+            y_true=label,
+            feature=importance_df["feature"].iloc[-1],
+        )
 
         shap.summary_plot(shap_values,
                           plot_type="bar",
@@ -466,7 +414,6 @@ def plot_compare_roc(shap_expl:shap.Explanation,
     参数
     ----
     shap_expl : shap.Explanation
-    simulate_missing_feature : callable之前定义的函数
     feature : str
         要“删除”的特征名
     y_true : label

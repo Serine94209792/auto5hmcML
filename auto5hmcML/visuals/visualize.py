@@ -3,7 +3,7 @@ import numpy as np
 import seaborn as sns
 import pandas as pd
 import umap
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.decomposition import PCA, KernelPCA
 from typing import List
 from sklearn.calibration import CalibrationDisplay
@@ -14,6 +14,7 @@ from sklearn.metrics import (
     average_precision_score,
 )
 from .base_visual import plot_confusion_matrix,plot_roc_curve_combined,print_classification_report
+from .classifier_plot import  plot_calibration_curve, plot_ks_curve, plot_cumulative_gain, plot_lift_curve
 
 def Visualization(
         model: Pipeline,
@@ -72,25 +73,32 @@ def Visualization(
     plt.tight_layout()
     plt.savefig("PR curve.png")
 
-    CalibrationDisplay.from_estimator(
-        estimator=model,
-        X=testset,
-        y=testlabel,
-        n_bins=10,
-        strategy="quantile"  # "uniform" / "quantile"
-    )
-    plt.plot([0, 1], [0, 1], '--', label='perfectly calibrated')
-    plt.title("Calibration Curve")
-    plt.legend(loc='best')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig("Calibration curve.png")
-
     dataset=pd.concat([trainset,testset],axis=0)
     label=pd.concat([trainlabel,testlabel],axis=0)
+    dataset = dataset.reset_index(drop=True)
+    label = label.reset_index(drop=True)
+    plot_cumulative_gain(model=model,
+                         X=dataset,
+                         y=label,
+    )
+
+    plot_lift_curve(model=model,
+                    X=dataset,
+                    y=label,
+    )
+
+    plot_calibration_curve(model=model,
+                            X=dataset,
+                            y=label,
+    )
+
+    plot_ks_curve(model=model,
+                    X=dataset,
+                    y=label,
+    )
+
     label=label.to_list()
     dataset=dataset[feature_sel]
-    dataset=dataset.reset_index(drop=True)
     scaler = StandardScaler()
     data_scaled = scaler.fit_transform(dataset)
     tsne = TSNE(n_components=2, random_state=42, perplexity=30)

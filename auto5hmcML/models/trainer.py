@@ -3,20 +3,23 @@ import pandas as pd
 import numpy as np
 import optuna
 from typing import List, Union, Optional
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.svm import SVC
-from ..utils import get_scores,get_cv_score,optimize_and_build_pipeline
+from ..utils import get_scores,get_cv_score,optimize_and_build_pipeline,load_top_n_estimators
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import (
     ExtraTreesClassifier,
     AdaBoostClassifier,
     GradientBoostingClassifier
 )
+from sklearn.ensemble import VotingClassifier
 import os
 from imblearn.ensemble import BalancedRandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.base import clone
+from sklearn.model_selection import StratifiedKFold
 
 def trainmodels(trainset: pd.DataFrame,
                 testset: pd.DataFrame,
@@ -33,7 +36,7 @@ def trainmodels(trainset: pd.DataFrame,
                 learner: bool=True,
                 n_components_hp: bool=True,
                 n_components: Optional[int]=None,
-                max_n_compoents: int=10,
+                max_n_components: int=10,
                 imbalencer_type: Optional[str]="tomeklinks",
                 selection_method: Optional[str]="l1",
                 filter_type: Optional[str]="svc",
@@ -50,7 +53,7 @@ def trainmodels(trainset: pd.DataFrame,
     n_trials超参数寻找次数
     direction：优化方向
     当leaner为Ture时，若n_components_hp为True，则n_components为超参数可不提供值，若n_components_hp为False，则n_components必须提供值
-    max_n_compoents默认为10，作为超参数的最大搜索值，推荐为训练集样本数的1/10
+    max_n_components默认为10，作为超参数的最大搜索值，推荐为训练集样本数的1/10
     kwargs继承自createpipeline
 
     无返回
@@ -79,7 +82,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -126,7 +129,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -174,7 +177,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -228,7 +231,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -279,7 +282,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -330,7 +333,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -377,7 +380,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -425,7 +428,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -472,7 +475,7 @@ def trainmodels(trainset: pd.DataFrame,
         nonlocal n_components
         if learner:
             if n_components_hp:
-                n_components = trial.suggest_int("n_components", 2, max_n_compoents)
+                n_components = trial.suggest_int("n_components", 2, max_n_components)
         else:
             n_components = 2
 
@@ -656,3 +659,157 @@ def trainmodels(trainset: pd.DataFrame,
 
     df_all=pd.concat(df_list,axis=0)
     df_all.to_csv("all_model_metrics.csv")
+
+
+def ensemblemodels(
+        trainset: pd.DataFrame,
+        testset: pd.DataFrame,
+        y: str,
+        drop_y: Optional[List[str]] = None,
+        scoring: Union[str, callable] = "accuracy",
+        cv: int = 10,
+        n_trials: int = 100,
+        direction: str = "maximize",
+        top_n: int = 5,  ###new params
+        n_jobs: int = -1,  ###new params
+        )->None:
+    """
+    ensemble best top_n models in trainmodels
+    """
+    if y not in trainset.columns or y not in testset.columns:
+        raise ValueError(f"{y} should in trainset and testset")
+
+    trainlabel = trainset[y]
+    testlabel = testset[y]
+    trainlabel = trainlabel.astype(int)
+    testlabel = testlabel.astype(int)
+    trainset = trainset.drop([y], axis=1)
+    testset = testset.drop([y], axis=1)
+
+    if drop_y is not None:
+        drop_y=[i for i in drop_y if i != y]
+        trainset=trainset.drop(drop_y,axis=1)
+        testset=testset.drop(drop_y,axis=1)
+
+    estimators=load_top_n_estimators(metric_file="all_model_metrics.csv",top_n=top_n,json_out="ensemble.json")
+
+    def objective(trial):
+        weights = [trial.suggest_float(f"w_{i}", 1.0, 100.0,step=1.0) for i in range(len(estimators))]
+        ####基模型将会被重新拟合
+        clf = VotingClassifier(estimators=estimators,
+                               voting="soft",
+                               n_jobs=n_jobs,
+                               weights=weights)
+
+        val_scores, models = get_cv_score(clf, trainset, trainlabel, scoring, cv,n_jobs=n_jobs)
+        trial.set_user_attr("models", models)
+        trial.set_user_attr("val_scores", val_scores)
+        test_scores = get_scores(models, testset, testlabel)
+        trial.set_user_attr("test_scores", test_scores)
+        return np.mean(val_scores)
+
+    if not os.path.exists("./ensemble/"):
+        os.mkdir("./ensemble/")
+    os.chdir("./ensemble/")
+    print("Optimizing ensemble model...\n")
+    df_emsenble=optimize_and_build_pipeline(objective,
+                                n_trials=n_trials, direction=direction)
+
+    df = pd.read_csv("all_model_metrics.csv", index_col=0)
+    df=pd.concat([df,df_emsenble],axis=0)
+    df.to_csv("all_model_metrics_ensemble.csv")
+
+def stackmodels(
+        trainset: pd.DataFrame,
+        testset: pd.DataFrame,
+        y: str,
+        drop_y: Optional[List[str]] = None,
+        scoring: Union[str, callable] = "accuracy",
+        cv: int = 10,
+        n_trials: int = 100,
+        direction: str = "maximize",
+        top_n: int = 15,  ###new params
+        save_features: int=8, ###new params
+        add_to_original: bool = False,  ###new params
+        learner : bool = True,  ###new params
+        )->None:
+
+    """
+    重写StackClassifier原因是如果调节超参数，每次元矩阵会被重新全部生成一遍，浪费时间
+    add_to_original: 是否将元矩阵加入原来的trainset
+    """
+
+    if top_n<save_features:
+        raise ValueError("top_n should be greater than save_features")
+
+    if y not in trainset.columns or y not in testset.columns:
+        raise ValueError(f"{y} should in trainset and testset")
+
+    trainlabel = trainset[y]
+    testlabel = testset[y]
+    trainlabel = trainlabel.astype(int)
+    testlabel = testlabel.astype(int)
+    trainset = trainset.drop([y], axis=1)
+    testset = testset.drop([y], axis=1)
+
+    if drop_y is not None:
+        drop_y = [i for i in drop_y if i != y]
+        trainset = trainset.drop(drop_y, axis=1)
+        testset = testset.drop(drop_y, axis=1)
+
+    if not os.path.exists("all_model_metrics_ensemble.csv"):
+        raise FileNotFoundError("all_model_metrics_ensemble.csv not found, please run ensemblemodels first")
+
+    base_ests = load_top_n_estimators(metric_file="all_model_metrics_ensemble.csv", top_n=top_n, json_out="stack.json")
+    K = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+    oof_preds_train = np.zeros((trainset.shape[0], len(base_ests)))
+    oof_preds_test = np.zeros((testset.shape[0], len(base_ests)))
+    for m, (name, est) in enumerate(base_ests):
+        for train_idx, valid_idx in K.split(trainset, trainlabel):
+            est_clone = clone(est).fit(trainset.iloc[train_idx], trainlabel.iloc[train_idx])
+            proba_train = getattr(est_clone, "predict_proba")(trainset.iloc[valid_idx])[:, 1]
+            oof_preds_train[valid_idx, m] = proba_train
+            proba_test = getattr(est_clone, "predict_proba")(testset)[:, 1]
+            oof_preds_test[:,m] += proba_test
+        oof_preds_test[:,m] /= cv
+
+    col_names = [f"metafeature_{i}" for i in range(len(base_ests))]
+    meta_train_X=pd.DataFrame(oof_preds_train,columns=col_names,index=trainset.index)
+    meta_test_X=pd.DataFrame(oof_preds_test,columns=col_names,index=testset.index)
+    if add_to_original:
+        meta_train_X = pd.concat([meta_train_X, trainset], axis=1)
+        meta_test_X = pd.concat([meta_test_X, testset], axis=1)
+
+    meta_train_X[y]=trainlabel
+    meta_test_X[y]=testlabel
+
+    if not os.path.exists("./stack/"):
+        os.mkdir("./stack/")
+    os.chdir("./stack/")
+
+    meta_train_X.to_csv("stacked_meta_trainset.csv",index=False)
+    meta_test_X.to_csv("stacked_meta_testset.csv",index=False)
+
+    trainmodels(
+        trainset=meta_train_X,
+        testset=meta_test_X,
+        y=y,
+        drop_y=None,
+        scoring=scoring,
+        cv=cv,
+        n_trials=n_trials,
+        direction=direction,
+        scaler=False,
+        imbalencer=False,
+        first_filter=True,  ##可有监督筛选
+        second_filter=False,
+        learner=learner,   ##可调超参数
+        ff_kwargs={
+            "mode":"k_best",
+            "function": "mutual_info_classif",
+            "param": save_features
+        },
+        max_n_components=save_features,
+    )
+
+    os.chdir("../")

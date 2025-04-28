@@ -3,14 +3,20 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.model_selection import cross_validate
 from sklearn.metrics import accuracy_score, f1_score, matthews_corrcoef, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn_pandas import DataFrameMapper
 from typing import Tuple, Union, List
+from sklearn.ensemble import VotingClassifier
 import optuna
 import joblib
+from joblib import parallel_backend
+import warnings
+import os
+import gc
+import json
 
 def SplitDataSet(expre_input,dataset_input,dataset_output,target,test_size=0.2):
     """
@@ -60,14 +66,16 @@ def SplitDataSet(expre_input,dataset_input,dataset_output,target,test_size=0.2):
     trainset_scale.to_csv("trainset_scale.csv", header=True, index=False)
     return trainset,testset
 
-def get_cv_score(pipeline: Pipeline,
+def get_cv_score(pipeline: Union[Pipeline,VotingClassifier],
                  X: pd.DataFrame,
                  y: pd.Series,
                  scoring: Union[str,callable]="accuracy",
-                 cv_splits: int=10)->Tuple[np.ndarray,np.ndarray]:
+                 cv_splits: int=10,
+                 n_jobs: int=-1,
+                 )->Tuple[np.ndarray,np.ndarray]:
 
     cv = StratifiedKFold(n_splits=cv_splits, shuffle=True,random_state=42)
-    cv_results = cross_validate(pipeline, X, y, scoring=scoring, cv=cv, n_jobs=-1,return_estimator=True)
+    cv_results = cross_validate(pipeline, X, y, scoring=scoring, cv=cv, n_jobs=n_jobs,return_estimator=True)
     ####使用包装好的cross_validata方便加速
     val_scores = cv_results["test_score"]
     models = cv_results["estimator"]
@@ -99,6 +107,7 @@ def optimize_and_build_pipeline(
         n_trials: int =100,
         direction: str="maximize")->pd.DataFrame:
 
+    gc.collect()
     study = optuna.create_study(direction=direction)
     study.optimize(objective_func, n_trials=n_trials)
     print("Best value:", study.best_trial.values)
@@ -126,3 +135,36 @@ def optimize_and_build_pipeline(
     df.to_csv("metrics.csv")
     return df
 
+def load_top_n_estimators(
+        metric_file: str = "all_model_metrics.csv",
+        top_n: int = 5,
+        json_out: str = "selected_models.json"
+) -> List[Tuple[str, object]]:
+    """
+    读取 metrics，按 Val_score 降序选出前 n_top 个，
+    返回 [(model_name, estimator), …]。
+    行索引示例： logistic_0, xgboost_3 …；含mean的行自动忽略。
+    """
+    df = pd.read_csv(metric_file,index_col=0)
+    df = df.loc[~df.index.str.contains(r"mean", case=False)]
+    top_idx = df["val_score"].sort_values(ascending=False).head(top_n).index
+    estimators = []
+    path_mapping={}
+    for name in top_idx:
+        family, idx = name.rsplit("_", 1)          # 拆成文件夹名和编号
+        pkl_path = os.path.join(family, f"{idx}_best_model.pkl")
+        if not os.path.exists(pkl_path):
+            warnings.warn(f"cannot find {pkl_path}, skip this model")
+            continue
+        est = joblib.load(pkl_path)
+        estimators.append((name, est))
+        path_mapping[name]=pkl_path
+
+    if len(estimators)==0:
+        raise RuntimeError("no estimators found, please check the model files")
+
+    if json_out is not None:
+        with open(json_out, "w", encoding="utf-8") as f:
+            json.dump(path_mapping, f, indent=4, ensure_ascii=False)
+
+    return estimators

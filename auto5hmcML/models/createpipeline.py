@@ -1,5 +1,5 @@
 from ..classes import Imbalencer,Learner,FirstFilter,SecondFilter
-from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from typing import Optional
 def CreatePipeline(scaler: bool=True,
@@ -38,24 +38,18 @@ def CreatePipeline(scaler: bool=True,
     """
 
     # 如果传入 None 则自动设为空字典，避免后续报错
-    if imbalencer_kwargs is None:
-        imbalencer_kwargs = {}
     if ff_kwargs is None:
         ff_kwargs = {}
     if sf_kwargs is None:
         sf_kwargs = {}
     if lr_kwargs is None:
         lr_kwargs = {}
+    if imbalencer_kwargs is None:
+        imbalencer_kwargs = {}
 
     pipeline_list=[]
     if scaler:
         pipeline_list.append(("scaler",StandardScaler()))
-
-    if imbalencer:
-        pipeline_list.append(("imbalence",Imbalencer(
-            model_type=imbalencer_type,
-            **imbalencer_kwargs
-        )))
 
     if first_filter:
         pipeline_list.append(("first_filter",FirstFilter(**ff_kwargs)))
@@ -72,6 +66,12 @@ def CreatePipeline(scaler: bool=True,
             model_type=learner_type,
             n_components=n_components,
             **lr_kwargs
+        )))
+
+    if imbalencer:
+        pipeline_list.append(("imbalence", Imbalencer(
+            model_type=imbalencer_type,
+            **imbalencer_kwargs
         )))
 
     pipeline=Pipeline(pipeline_list)

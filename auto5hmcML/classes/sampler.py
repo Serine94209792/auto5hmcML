@@ -1,4 +1,4 @@
-from imblearn.over_sampling import SMOTE,KMeansSMOTE
+from imblearn.over_sampling import SMOTE,BorderlineSMOTE
 from imblearn.under_sampling import ClusterCentroids, TomekLinks
 from imblearn.combine import SMOTETomek
 import numpy as np
@@ -18,7 +18,7 @@ class Imbalencer:
         """
         参数：
         model_type : str
-            "smote", "kmeans", "centroids", "tomeklinks", "smotetomek"
+            "smote", "borderline", "centroids", "tomeklinks", "smotetomek"
 
         random_state: int
             随机种子，确保结果可复现。
@@ -38,8 +38,8 @@ class Imbalencer:
         if self.model_type == "smote":
             sampler = SMOTE(random_state=self.random_state, **self.model_kwargs)
 
-        elif self.model_type == "kmeans":
-            sampler = KMeansSMOTE(random_state=self.random_state, **self.model_kwargs)
+        elif self.model_type == "borderline":
+            sampler = BorderlineSMOTE(random_state=self.random_state, **self.model_kwargs)
 
         elif self.model_type == "centroids":
             sampler = ClusterCentroids(random_state=self.random_state, **self.model_kwargs)
